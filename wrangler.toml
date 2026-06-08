@@ -1,0 +1,7 @@
+name = "tw-weather-backend-worker"
+main = "src/index.ts"
+compatibility_date = "2026-06-08"
+
+[vars]
+CWA_API_BASE_URL = "https://opendata.cwa.gov.tw"
+ALLOWED_ORIGIN = "*"
