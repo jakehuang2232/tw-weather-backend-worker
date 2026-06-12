@@ -1,15 +1,15 @@
 const TEN_MINUTES = 10 * 60;
-const SIX_HOURS = 6 * 60 * 60;
+const THIRTY_MINUTES = 30 * 60;
 
 const DATASET_TTL_SECONDS: Record<string, number> = {
-  "F-C0032-001": SIX_HOURS,
+  "F-C0032-001": THIRTY_MINUTES,
   "O-A0001-001": TEN_MINUTES,
   "O-A0002-001": TEN_MINUTES,
   "O-A0003-001": TEN_MINUTES
 };
 
 const DATASET_PATTERN_TTL_SECONDS: Array<[RegExp, number]> = [
-  [/^F-D0047-\d{3}$/, SIX_HOURS]
+  [/^F-D0047-\d{3}$/, THIRTY_MINUTES]
 ];
 
 export const DEFAULT_TTL_SECONDS = TEN_MINUTES;
