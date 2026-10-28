@@ -1,4 +1,4 @@
-import { getDatasetCacheTtlSeconds } from "./cache-policy";
+import { ALLOWED_DATASETS, DATASET_TTL_SECONDS } from "./cache-policy";
 
 const CWA_DATASTORE_PREFIX = "/api/v1/rest/datastore/";
 const CWA_DEFAULT_BASE_URL = "https://opendata.cwa.gov.tw";
@@ -34,7 +34,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
     return jsonResponse(
       {
         error: "Not Found",
-        message: `Use ${CWA_DATASTORE_PREFIX}{datasetId} to proxy CWA Open Data API.`
+        message: `Use ${CWA_DATASTORE_PREFIX}{datasetId} with a township forecast, F-D0047-001 to F-D0047-087.`
       },
       404,
       corsHeaders
@@ -45,26 +45,29 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
     return jsonResponse({ error: "CWA_API_KEY secret is not configured" }, 500, corsHeaders);
   }
 
-  const ttlSeconds = getDatasetCacheTtlSeconds(datasetId);
-  const cacheKeyRequest = buildCacheKeyRequest(request, url);
+  const ttlSeconds = DATASET_TTL_SECONDS;
+  const cacheKeyRequest = buildCacheKeyRequest(url, datasetId);
   const cache = getDefaultCache();
   const cachedResponse = await cache.match(cacheKeyRequest);
 
   if (cachedResponse) {
-    return withHeaders(cachedResponse, {
+    // The client may keep it only for what is left of the hour.
+    const ageSeconds = Number(cachedResponse.headers.get("Age")) || 0;
+    const response = withHeaders(cachedResponse, {
       ...corsHeaders,
+      "Cache-Control": `public, max-age=${Math.max(ttlSeconds - ageSeconds, 0)}`,
       "X-Cache": "HIT",
       "X-CWA-Cache-TTL": String(ttlSeconds)
     });
+
+    response.headers.delete("Age");
+
+    return response;
   }
 
-  const upstreamRequest = buildUpstreamRequest(request, url, env);
-  const upstreamResponse = await fetch(upstreamRequest, {
-    cf: {
-      cacheTtl: ttlSeconds,
-      cacheEverything: true
-    }
-  });
+  // No fetch cache underneath: the Cache API's copy is the only one, so its
+  // age is the forecast's.
+  const upstreamResponse = await fetch(buildUpstreamRequest(request, datasetId, env));
 
   const response = withHeaders(upstreamResponse, {
     ...corsHeaders,
@@ -87,17 +90,16 @@ function getDatasetId(pathname: string): string | null {
 
   const datasetId = pathname.slice(CWA_DATASTORE_PREFIX.length);
 
-  if (!/^[A-Z]-[A-Z]\d{4}-\d{3}$/.test(datasetId)) {
-    return null;
-  }
-
-  return datasetId;
+  return ALLOWED_DATASETS.has(datasetId) ? datasetId : null;
 }
 
-function buildUpstreamRequest(request: Request, url: URL, env: Env): Request {
-  const upstreamUrl = new URL(url.pathname + url.search, env.CWA_API_BASE_URL ?? CWA_DEFAULT_BASE_URL);
+// The client's query is dropped: CWA ignores the app's locationName and sends
+// the whole county anyway, so every district shares the county's one copy.
+function buildUpstreamRequest(request: Request, datasetId: string, env: Env): Request {
+  const upstreamUrl = new URL(CWA_DATASTORE_PREFIX + datasetId, env.CWA_API_BASE_URL ?? CWA_DEFAULT_BASE_URL);
 
   upstreamUrl.searchParams.set("Authorization", env.CWA_API_KEY);
+  upstreamUrl.searchParams.set("format", "JSON");
 
   const headers = new Headers(request.headers);
 
@@ -111,17 +113,9 @@ function buildUpstreamRequest(request: Request, url: URL, env: Env): Request {
   });
 }
 
-function buildCacheKeyRequest(request: Request, url: URL): Request {
-  const cacheUrl = new URL(url.toString());
-
-  cacheUrl.searchParams.delete("Authorization");
-  cacheUrl.searchParams.sort();
-
-  return new Request(cacheUrl.toString(), {
-    method: "GET",
-    headers: {
-      Accept: request.headers.get("Accept") ?? ""
-    }
+function buildCacheKeyRequest(url: URL, datasetId: string): Request {
+  return new Request(new URL(CWA_DATASTORE_PREFIX + datasetId, url.origin).toString(), {
+    method: "GET"
   });
 }
 

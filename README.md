@@ -5,8 +5,9 @@ Cloudflare Worker for proxying the Central Weather Administration Open Data API.
 ## 功能
 
 - 保留中央氣象署 REST datastore API 路徑格式。
+- 只代理 App 用到的鄉鎮天氣預報（`F-D0047-001` 到 `F-D0047-087` 的奇數號），其他資料集一律 404。
 - 使用 Cloudflare Worker secret 注入 API key，不讓前端暴露授權碼。
-- 使用 Cloudflare Cache API 快取 GET response。
+- 使用 Cloudflare Cache API 快取 GET response，每個資料集（縣市）只存一份。
 - 回傳中央氣象署原始 response，不轉換 schema。
 - 內建 CORS 與 `/health` endpoint。
 
@@ -21,9 +22,11 @@ GET /api/v1/rest/datastore/{datasetId}
 範例：
 
 ```text
-GET /api/v1/rest/datastore/F-C0032-001?locationName=臺北市&format=JSON
-GET /api/v1/rest/datastore/O-A0001-001?StationName=臺北&format=JSON
+GET /api/v1/rest/datastore/F-D0047-061?format=JSON
+GET /api/v1/rest/datastore/F-D0047-063?format=JSON&locationName=中正區
 ```
+
+查詢參數不會轉給中央氣象署：Worker 一律向上游要整個縣市（`format=JSON`），`locationName` 等參數會被忽略（中央氣象署本來就不理會 `locationName`，一樣回傳全縣市）。
 
 Worker 會轉發到：
 
@@ -39,20 +42,13 @@ Authorization={CWA_API_KEY}
 
 ## 快取策略
 
-REST datastore API 使用資料集更新頻率作為 Cloudflare cache TTL。中央氣象署官方文件提到 ETag 用戶端快取機制僅提供檔案下載 API 服務；本 Worker 對 REST datastore 使用 edge cache。
+中央氣象署官方文件提到 ETag 用戶端快取機制僅提供檔案下載 API 服務；本 Worker 對 REST datastore 使用 edge cache。
 
-目前內建：
+- 快取鍵只有資料集代號，不含查詢參數：同一縣市的所有鄉鎮共用一份。22 縣市 × 2 種預報，每個 Cloudflare 機房最多 44 份。
+- TTL 1 小時，也就是每個機房每份資料每小時最多向中央氣象署要一次。
+- 命中快取時，回應的 `Cache-Control: max-age` 是這份快取剩下的秒數，裝置端不會把資料留得比 1 小時更久。
 
-| Dataset | 用途 | TTL |
-| --- | --- | --- |
-| `F-C0032-001` | 一般天氣預報，今明 36 小時 | 6 小時 |
-| `F-D0047-*` | 鄉鎮市區天氣預報 | 6 小時 |
-| `O-A0001-001` | 自動氣象站觀測 | 10 分鐘 |
-| `O-A0002-001` | 自動雨量站觀測 | 10 分鐘 |
-| `O-A0003-001` | 氣象觀測相關資料 | 10 分鐘 |
-| 其他 dataset | fallback | 10 分鐘 |
-
-TTL 設定集中在 [`src/cache-policy.ts`](src/cache-policy.ts)。
+允許的資料集與 TTL 集中在 [`src/cache-policy.ts`](src/cache-policy.ts)。
 
 ## 開發
 

@@ -1,31 +1,10 @@
-const TEN_MINUTES = 10 * 60;
-const THIRTY_MINUTES = 30 * 60;
+const ONE_HOUR = 60 * 60;
 
-const DATASET_TTL_SECONDS: Record<string, number> = {
-  "F-C0032-001": THIRTY_MINUTES,
-  "O-A0001-001": TEN_MINUTES,
-  "O-A0002-001": TEN_MINUTES,
-  "O-A0003-001": TEN_MINUTES
-};
+// The app's datasets and nothing else: every county's township forecasts,
+// F-D0047-001 to F-D0047-087, odd numbers only (each county's three days,
+// then its week).
+export const ALLOWED_DATASETS: ReadonlySet<string> = new Set(
+  Array.from({ length: 44 }, (_, index) => `F-D0047-${String(2 * index + 1).padStart(3, "0")}`)
+);
 
-const DATASET_PATTERN_TTL_SECONDS: Array<[RegExp, number]> = [
-  [/^F-D0047-\d{3}$/, THIRTY_MINUTES]
-];
-
-export const DEFAULT_TTL_SECONDS = TEN_MINUTES;
-
-export function getDatasetCacheTtlSeconds(datasetId: string): number {
-  const exactTtl = DATASET_TTL_SECONDS[datasetId];
-
-  if (exactTtl !== undefined) {
-    return exactTtl;
-  }
-
-  for (const [pattern, ttl] of DATASET_PATTERN_TTL_SECONDS) {
-    if (pattern.test(datasetId)) {
-      return ttl;
-    }
-  }
-
-  return DEFAULT_TTL_SECONDS;
-}
+export const DATASET_TTL_SECONDS = ONE_HOUR;
