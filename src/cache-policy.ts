@@ -15,12 +15,13 @@ export const ALLOWED_DATASETS: ReadonlySet<string> = new Set([...FORECAST_DATASE
 
 export const FORECAST_TTL_SECONDS = ONE_HOUR;
 
-// The stations report every ten minutes, and CWA publishes a report a little
-// after its time: a copy is kept until the report after its newest should be
-// out. The lateness is a guess, not measured; a guess too short costs only
-// a few of the short copies below.
+// The stations report every ten minutes, and CWA publishes a report about ten
+// minutes after its time (measured 2026-11-03: 11:00's came out between
+// 11:09:57 and 11:10:58, 11:10's between 11:20:07 and 11:21:08): a copy is
+// kept until the report after its newest should be out, with a minute or two
+// to spare. Too short a lateness costs a few of the short copies below.
 export const OBSERVATION_PERIOD_SECONDS = TEN_MINUTES;
-export const OBSERVATION_LATENESS_SECONDS = 2 * ONE_MINUTE;
+export const OBSERVATION_LATENESS_SECONDS = 12 * ONE_MINUTE;
 export const OBSERVATION_LATE_TTL_SECONDS = ONE_MINUTE;
 // A copy whose report times can't be read.
 export const OBSERVATION_FALLBACK_TTL_SECONDS = OBSERVATION_PERIOD_SECONDS / 2;
