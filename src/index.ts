@@ -1,7 +1,16 @@
-import { ALLOWED_DATASETS, DATASET_TTL_SECONDS } from "./cache-policy";
+import {
+  ALLOWED_DATASETS,
+  FORECAST_TTL_SECONDS,
+  OBSERVATION_DATASET,
+  newestReport,
+  observationTtlSeconds
+} from "./cache-policy";
 
 const CWA_DATASTORE_PREFIX = "/api/v1/rest/datastore/";
 const CWA_DEFAULT_BASE_URL = "https://opendata.cwa.gov.tw";
+// When the cached copy runs out (seconds since 1970), kept with the copy:
+// each dataset keeps its copies for its own time.
+const EXPIRES_HEADER = "X-Cache-Expires";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -34,7 +43,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
     return jsonResponse(
       {
         error: "Not Found",
-        message: `Use ${CWA_DATASTORE_PREFIX}{datasetId} with a township forecast, F-D0047-001 to F-D0047-087.`
+        message: `Use ${CWA_DATASTORE_PREFIX}{datasetId} with a township forecast, F-D0047-001 to F-D0047-087, or ${OBSERVATION_DATASET}.`
       },
       404,
       corsHeaders
@@ -45,42 +54,72 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
     return jsonResponse({ error: "CWA_API_KEY secret is not configured" }, 500, corsHeaders);
   }
 
-  const ttlSeconds = DATASET_TTL_SECONDS;
   const cacheKeyRequest = buildCacheKeyRequest(url, datasetId);
   const cache = getDefaultCache();
   const cachedResponse = await cache.match(cacheKeyRequest);
 
   if (cachedResponse) {
-    // The client may keep it only for what is left of the hour.
-    const ageSeconds = Number(cachedResponse.headers.get("Age")) || 0;
+    // The client may keep it only for what is left of the copy's time.
+    const expires = Number(cachedResponse.headers.get(EXPIRES_HEADER)) || 0;
     const response = withHeaders(cachedResponse, {
       ...corsHeaders,
-      "Cache-Control": `public, max-age=${Math.max(ttlSeconds - ageSeconds, 0)}`,
-      "X-Cache": "HIT",
-      "X-CWA-Cache-TTL": String(ttlSeconds)
+      "Cache-Control": `public, max-age=${Math.max(Math.floor(expires - Date.now() / 1000), 0)}`,
+      "X-Cache": "HIT"
     });
 
     response.headers.delete("Age");
+    response.headers.delete(EXPIRES_HEADER);
 
     return response;
   }
 
   // No fetch cache underneath: the Cache API's copy is the only one, so its
-  // age is the forecast's.
-  const upstreamResponse = await fetch(buildUpstreamRequest(request, datasetId, env));
+  // age is the data's.
+  const upstream = await forCache(datasetId, await fetch(buildUpstreamRequest(request, datasetId, env)));
 
-  const response = withHeaders(upstreamResponse, {
+  const response = withHeaders(upstream.response, {
     ...corsHeaders,
-    "Cache-Control": `public, max-age=${ttlSeconds}, s-maxage=${ttlSeconds}`,
+    "Cache-Control": `public, max-age=${upstream.ttlSeconds}, s-maxage=${upstream.ttlSeconds}`,
     "X-Cache": "MISS",
-    "X-CWA-Cache-TTL": String(ttlSeconds)
+    "X-CWA-Cache-TTL": String(upstream.ttlSeconds)
   });
 
-  if (response.ok) {
-    ctx.waitUntil(cache.put(cacheKeyRequest, response.clone()));
+  if (response.ok && upstream.cacheable) {
+    const copy = withHeaders(response.clone(), {
+      [EXPIRES_HEADER]: String(Math.floor(Date.now() / 1000) + upstream.ttlSeconds)
+    });
+
+    ctx.waitUntil(cache.put(cacheKeyRequest, copy));
   }
 
   return response;
+}
+
+// How long CWA's response is kept: a forecast for the hour; the observations
+// until their next report is due, read from the reports' times, and not at
+// all if the body is not JSON (CWA's error pages).
+async function forCache(
+  datasetId: string,
+  upstreamResponse: Response
+): Promise<{ response: Response; ttlSeconds: number; cacheable: boolean }> {
+  if (datasetId !== OBSERVATION_DATASET) {
+    return { response: upstreamResponse, ttlSeconds: FORECAST_TTL_SECONDS, cacheable: true };
+  }
+
+  const text = await upstreamResponse.text();
+  const response = new Response(text, upstreamResponse);
+
+  // The body as read, not as sent.
+  response.headers.delete("Content-Length");
+  let body: unknown;
+
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return { response, ttlSeconds: 0, cacheable: false };
+  }
+
+  return { response, ttlSeconds: observationTtlSeconds(newestReport(body), new Date()), cacheable: true };
 }
 
 function getDatasetId(pathname: string): string | null {
